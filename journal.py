@@ -1,5 +1,6 @@
 import base64
 import re
+import json
 from Editor import Editor
 from getpass import getpass
 from os import urandom
@@ -14,108 +15,135 @@ class Journal(Editor):
     def __init__(self, file, key=None):
         super().__init__()
         self.file = file
-        self.is_valid_key = False
         self.key = key
+        self.is_valid_key = self._is_valid_key()
         # self.journal = [(date_0, entry_0), ..., (date_n, entry_n)]
         # must be initialized by _load_to_search()
-        self.journal = None
+        self.journal_dict = {}
 
-    # Decrypt the old data
-    # Get a new entry from the user and add it to the old data
-    # Write all data back to file encrypted
-    def new_entry(self):
-        f = Fernet(self.key)
-
-        file = open(self.file, 'rb')
-        old_entries = file.read()
-        file.close()
-
+    def _file_exists(self):
         try:
-            old_entries = f.decrypt(old_entries).decode()
-        except:
-            old_entries = ''
-
-        now = datetime.now()
-        time_stamp = f'{now.month}/{now.day}/{now.year} {now.hour}:{now.minute}\n'
-        old_entries += '\n\n\n' + time_stamp
-
-        print('    ' + '_' * 80)
-        usr_inpt = self.get_long_input()
-        if usr_inpt:
-            old_entries += '\n' + usr_inpt
-            old_bytes = old_entries.encode()
-            self._write(old_bytes)
-
-    # Given an encoded message, encrypt it and write it to file
-    def _write(self, message):
-        f = Fernet(self.key)
-        file = open(self.file, 'wb')
-        file.write(f.encrypt(message))
-        file.close()
-
-    # Decrypt entire file and print it
-    def read_all(self):
-        f = Fernet(self.key)
-        file = open(self.file, 'rb')
-        data = file.read()
-        file.close()
-        print(f.decrypt(data).decode())
-
-    # set a key and check if it is a valid key for the set file
-    def set_key(self, key):
-        print('setting key... ')
-        self.key = key
-        if self._is_valid_key():
-            self.is_valid_key = True
-        else:
-            self.is_valid_key = False
-
-    # check if a set key is valid for a set file
-    def _is_valid_key(self):
-        print('validating key... ')
-        f = Fernet(self.key)
-        try:
-            file = open(self.file, 'rb')
-            file.close()
-        except FileNotFoundError:
-            print('file created')
-            file = open(self.file, 'w')
+            file = open(self.file, 'r')
             file.close()
             return True
-        try:
-
-            with open(self.file, 'rb') as file:
-                encrypted_data = file.read()
-                decrypted_data = f.decrypt(encrypted_data)
-                return True
-        except:
+        except FileNotFoundError:
             return False
 
-    # print list of dates and give user option to view entry corresponding
-    # to date
-    def search(self):
-        self._load_to_search()
-        for i in range(len(self.journal)):
-            print(f'{i+1}. {self.journal[i][0]}')
+    def _is_valid_key(self):
+        # if the key has not been set return False
+        if self.key == None:
+
+            self.is_valid_key = False
+            return False
+        # if the file does not exist then the key will be valid
+        elif not self._file_exists():
+            print('File Created')
+            self.is_valid_key = True
+            return True
+        # if the key is not None and the file exists
         try:
-            usr_inpt = int(input('>>> '))
-            return self.journal[i - 1][1]
+            # if the key successfully decrypts the file return True
+            f = Fernet(self.key)
+            file = open(self.file, 'rb')
+            encrypted_data = file.read()
+            decrypted_data = f.decrypt(encrypted_data)
+            file.close()
+            self.is_valid_key = True
+            return True
         except:
-            print('Invalid Input')
+            self.is_valid_key = False
+            return False
 
-    # decrypt all entries in the file and sort them by date into a list of tuples
-    # (date, entry)
-    def _load_to_search(self):
+    def _load_journal_dict(self):
+        if not self.is_valid_key or not self._file_exists():
+            return False
+
         f = Fernet(self.key)
-        date = re.compile('[0-9]{1,2}/[0-9]{1,2}/[0-9]{4} [0-9]{1,2}:[0-9]{1,2}')
         file = open(self.file, 'rb')
-        data = file.read()
+        enc_data = file.read()
+        dec_data = f.decrypt(enc_data)
+        self.journal_dict = json.loads(dec_data.decode())
         file.close()
-        decrypted = f.decrypt(data).decode()
-        dates = re.findall(date, decrypted)
-        entries = re.split(date, decrypted)
-        self.journal = list(zip(dates, entries[1:]))
+        return True
+    
+    def _save_journal_dict(self):
+        if not self.journal_dict:
+            return False
+        f = Fernet(self.key)
+        raw_data = json.dumps(self.journal_dict)
+        encrypted_data = f.encrypt(raw_data.encode())
+        file = open(self.file, 'wb')
+        file.write(encrypted_data)
+        file.close()
+        return True
 
+    def _view_formatted_entry(self, date_key, begin=''):
+        print(begin, end='')
+        print(len(date_key) * '_')
+        print(date_key, end='\n\n')
+        print(self.journal_dict[date_key])
+
+    def _get_time_stamp(self):
+        now = datetime.now()
+        time_stamp = f'{now.month}/{now.day}/{now.year} {now.hour}:{now.minute}'
+        return time_stamp
+
+    def _select_date(self):
+        if not self.journal_dict:
+            return False
+
+        dates = list(self.journal_dict.keys())
+        for i in range(len(dates)):
+            print(f'{i + 1}. {dates[i]}')
+
+        while True:
+            try:
+                usr_inpt = int(input('>>> '))
+                if usr_inpt > 0 and usr_inpt <= len(dates):
+                    break
+            except:
+                print('Invalid Input')
+
+        return dates[usr_inpt - 1]
+ 
+    def set_key(self, key):
+        self.key = key
+        if self._is_valid_key():
+            self._load_journal_dict()
+            return True
+        else:
+            return False
+
+    def new_entry(self):
+        time_stamp = self._get_time_stamp()
+        new_entry = self.get_long_input()
+        if new_entry:
+            self.journal_dict[time_stamp] = new_entry
+            self._save_journal_dict()
+
+    def view_entry(self):
+        if not self.journal_dict:
+            return False
+        date = self._select_date()
+        self._view_formatted_entry(date)
+
+    # FIXME: doesn't show first entry when there are more than 1 entries
+    def view_all_entries(self):
+        journal = iter(self.journal_dict)
+        first_date = next(journal)
+        self._view_formatted_entry(first_date)
+
+        for date in journal:
+            self._view_formatted_entry(date, '\n\n')
+
+    def edit_entry(self):
+        if not self.journal_dict:
+            return False
+        date = self._select_date()
+        edited_entry = self.edit(self.journal_dict[date])
+        edited_entry += '\nEdited ' + self._get_time_stamp()
+        self.journal_dict[date] = edited_entry
+        self._save_journal_dict()
 
 def hash_pass(password):
     password = password.encode()
@@ -129,7 +157,6 @@ def hash_pass(password):
     return base64.urlsafe_b64encode(kdf.derive(password))
 
 def main():
-
     j = Journal('/home/eric/Code/Personal/test_journal')
     psswd = getpass('password: ')
     key = hash_pass(psswd)
@@ -142,29 +169,38 @@ def main():
         j.set_key(key)
 
     while True:
-        print('1. Write')
-        print('2. Read')
-        print('3. Exit')
-        usr_inpt = input('>>> ')
-        if usr_inpt == '1':
-            print('Writing: ')
+        print('1. New Entry')
+        print('2. Edit Entry')
+        print('3. Read Entry')
+        print('4. Exit')
+
+        usr_inpt1 = input('>>> ')
+
+        if usr_inpt1 == '1':
             j.new_entry()
-        elif usr_inpt == '2':
-            print('1. View All')
-            print('2. Search Entry')
-            usr_inpt = input('>>> ')
-            if usr_inpt == '1':
-                print('_' * 80)
-                j.read_all()
-                print('_' * 80)
-            elif usr_inpt == '2':
-                print('_' * 80)
-                print(j.search())
-                print('_' * 80)
-        elif usr_inpt == '3':
+        elif usr_inpt1 == '2':
+            j.edit_entry()
+        elif usr_inpt1 == '3':
+            while True:
+                print('1. Read All Entries')
+                print('2. Lookup Entry')
+                print('3. Main Menu')
+                usr_inpt2 = input('>>> ')
+                if usr_inpt2 == '1':
+                    j.view_all_entries()
+                    break
+                elif usr_inpt2 == '2':
+                    j.view_entry()
+                    break
+                elif usr_inpt2 == '3':
+                    break
+                else:
+                    print('Invalid Input')
+        elif usr_inpt1 == '4':
+            print('Goodbye')
             break
         else:
             print('Invalid Input')
 
-
 main()
+
